@@ -1,3 +1,4 @@
+import gc
 import os
 import json
 import shlex
@@ -19,6 +20,7 @@ PLUGIN_DIR = os.path.join(CONT_HOME_DIR, "pytest-cannier")
 
 
 def setup_project(repo, sha, commands_setup):
+    gc.enable()
     proj = repo.split("/", 1)[1]
     url = f"https://github.com/{repo}"
     work_dir = os.path.join(CONT_SUBJECTS_DIR, proj, proj)
@@ -26,7 +28,6 @@ def setup_project(repo, sha, commands_setup):
     env = os.environ.copy()
     env["PATH"] = os.path.join(venv_dir, "bin") + ":" + env["PATH"]
     req_file = os.path.join(CONT_SUBJECTS_DIR, proj, "requirements.txt")
-    
     sp.run(["git", "clone", url, work_dir], check=True)
     sp.run(["git", "reset", "--hard", sha], cwd=work_dir, check=True)
     sp.run(["virtualenv", f"--python={EXECUTABLE}", venv_dir], check=True)

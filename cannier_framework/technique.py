@@ -1,15 +1,20 @@
 import os
+import gc
 import random
 import numpy as np
 
 from multiprocessing import Pool
 
-from cannier_framework.model import ModelTable, MODELS
 from cannier_framework.globals import ARGS, POINTS_DIR, DATA
 from cannier_framework.utils import get_sci_notation, PointPlot, load_subjects
 
+from cannier_framework.model import (
+    ModelTable, MODELS, BEST_MODELS, init_models_best
+)
+
 
 def get_points_chunk(args):
+    gc.enable()
     technique_id, chunk = args
     return TECHNIQUES[technique_id].get_points_chunk(chunk)
 
@@ -30,9 +35,6 @@ def get_pareto_front(scores):
 
 class Technique:
     def __init__(self):
-        raise NotImplementedError
-
-    def setup(self):
         raise NotImplementedError
 
     def iter_params(self):
@@ -62,6 +64,7 @@ class Technique:
         ]
 
         points = {}
+        gc.disable()
 
         with Pool(processes=ARGS.processes) as pool:
             for points_chunk in pool.imap_unordered(get_points_chunk, args):
@@ -103,7 +106,7 @@ class Technique:
             pins.append([*pp[:2], 135, self.get_scores_label(*pp[:2])])
             pins.append([*pp[:2], 315, self.get_params_label(*pp[2:])])
 
-        plot = PointPlot([("no marks", points[:, :2])], pins)
+        plot = PointPlot([("no marks", points[:, :2], "")], pins)
         plot.make(f"{self.technique_id}.tex")
 
     def make_table(self, project_names, thresh1, thresh2, n_samples):
@@ -154,6 +157,8 @@ class SingleModelTechnique(Technique):
             self.item_costs, thresh_l, thresh_u, int(n_samples)
         )
 
+        full_costs = self.model.project_masks @ self.item_costs
+        scores = np.c_[scores, np.r_[full_costs, full_costs.sum()]]
         table = ModelTable.from_data(project_names, scores)
         table.make(f"{self.technique_id}.tex")
 
@@ -170,9 +175,7 @@ def get_exp_reruns(p_fail, n_reruns):
 class Rerun(SingleModelTechnique):
     def __init__(self):
         self.technique_id = "Rerun"
-        self.model = MODELS["NOD-vs-Rest"]
-
-    def setup(self):
+        self.model = MODELS[BEST_MODELS["NOD-vs-Rest"]]
         labels = self.model.labels
         p_fail = DATA.items[labels, 1] / ARGS.n_reruns
         exp_reruns = get_exp_reruns(p_fail, ARGS.n_reruns)
@@ -184,9 +187,7 @@ class Rerun(SingleModelTechnique):
 class iDFlakies(SingleModelTechnique):
     def __init__(self):
         self.technique_id = "iDFlakies"
-        self.model = MODELS["NOD-vs-Victim"]
-
-    def setup(self):
+        self.model = MODELS[BEST_MODELS["NOD-vs-Victim"]]
         items = self.model.items
         n_reruns = 1 + .2 * (items[:, 2] - 1)
         self.item_costs = DATA.project_times[items[:, 0]] * n_reruns
@@ -194,22 +195,19 @@ class iDFlakies(SingleModelTechnique):
 
 class PairwiseTable(ModelTable):
     def format_cell(self, x, y, cell):
-        if cell == 0:
-            return "-"
-        elif y == 0:
-            return "%.2f" % cell
-        elif y == 1:
-            return f"${get_sci_notation(cell)}$"
+        if y == 0: return cell
+        elif cell == 0: return "-"
+        elif np.isnan(cell) or not np.isfinite(cell): return "$\\bot$"
+        elif y <= 2: return "%.0f" % cell
+        elif y == 3: return "%.2f" % cell
+        else: return f"${get_sci_notation(cell)}$"
 
 
 class Pairwise(Technique):
     def __init__(self):
         self.technique_id = "Pairwise"
-        self.model_v = MODELS["Victim-vs-Rest"]
-        self.model_p = MODELS["Polluter-vs-Rest"]
-
-    def setup(self):
-        pass
+        self.model_v = MODELS[BEST_MODELS["Victim-vs-Rest"]]
+        self.model_p = MODELS[BEST_MODELS["Polluter-vs-Rest"]]
 
     def iter_params(self):
         for thresh_v in range(101):
@@ -222,8 +220,8 @@ class Pairwise(Technique):
 
     def get_scores_ij(self, thresh_v, thresh_p, n_samples, i, j):
         scores_ij = np.empty((DATA.project_masks.shape[0], 2), dtype=float)
-        preds_v = self.model_v.preds[n_samples - 1, i]
-        preds_p = self.model_p.preds[n_samples - 1, j]
+        preds_v = self.model_v.preds[n_samples][i]
+        preds_p = self.model_p.preds[n_samples][j]
 
         for proj_id, scores_proj in enumerate(scores_ij):
             dependencies = DATA.dependencies[proj_id]
@@ -239,30 +237,31 @@ class Pairwise(Technique):
 
     def get_scores(self, thresh_v, thresh_p, n_samples):
         n_proj = DATA.project_masks.shape[0]
-        scores = np.zeros((n_proj + 1, 2), dtype=float)
+        scores = np.zeros((n_proj + 1, 4), dtype=float)
+        scores[:n_proj, 1] = DATA.total_pairs
 
         if n_samples > 0:
             rng = np.random.default_rng(seed=0)
 
             for i, j in rng.choice(ARGS.n_repeats, (ARGS.n_repeats, 2)):
-                scores[:n_proj] += self.get_scores_ij(
+                scores[:n_proj, (0, 3)] += self.get_scores_ij(
                     thresh_v, thresh_p, n_samples, i, j
                 )
 
-            scores[:n_proj] /= ARGS.n_repeats
+            scores[:n_proj, (0, 3)] /= ARGS.n_repeats
+            scores[:n_proj, 3] += n_samples * DATA.project_times
         else:
             scores[:n_proj, 0] = DATA.total_pairs
-            scores[:n_proj, 1] = 2 * DATA.item_counts * DATA.project_times
+            scores[:n_proj, 3] = 2 * DATA.item_counts * DATA.project_times
 
-        scores[:n_proj, 1] += n_samples * DATA.project_times
         scores[n_proj] = scores[:n_proj].sum(axis=0)
-        scores[:n_proj, 0] /= DATA.total_pairs
-        scores[n_proj, 0] /= DATA.total_pairs.sum()
+        scores[:n_proj, 2] = scores[:n_proj, 0] / DATA.total_pairs
+        scores[n_proj, 2] = scores[n_proj, 0] / DATA.total_pairs.sum()
         return scores
 
     def eval_params(self, thresh_v, thresh_p, n_samples):
         scores = self.get_scores(thresh_v, thresh_p, int(n_samples))
-        return scores[-1, 1:]
+        return scores[-1, 2:]
 
     def get_pin_points(self, points):
         return np.array([
@@ -277,26 +276,27 @@ class Pairwise(Technique):
 
     def make_table(self, project_names, thresh_v, thresh_p, n_samples):
         scores = self.get_scores(thresh_v, thresh_p, int(n_samples))
+        full_costs = 2 * DATA.item_counts * DATA.project_times
+        scores = np.c_[scores, np.r_[full_costs, full_costs.sum()]]
         table = PairwiseTable.from_data(project_names, scores)
         table.make(f"{self.technique_id}.tex")
 
 
-TECHNIQUES = {
-    technique.technique_id: technique for technique in (
-        Rerun(), iDFlakies(), Pairwise()
-    )
-}
+TECHNIQUES = {}
+
+
+def init_techniques():
+    for technique in (Rerun(), iDFlakies(), Pairwise()):
+        TECHNIQUES[technique.technique_id] = technique
 
 
 def make_points():
-    DATA.setup(len(load_subjects()))
-
-    for model in MODELS.values():
-        model.setup()
-        model.load_preds()
-
+    n_proj = len(load_subjects())
+    DATA.get_items_features(n_proj)
+    DATA.get_features_mean()
+    DATA.get_rest(n_proj)
+    init_models_best()
+    init_techniques()
+    for model in MODELS.values(): model.load_preds()
     os.makedirs(POINTS_DIR, exist_ok=True)
-    
-    for technique in TECHNIQUES.values():
-        technique.setup()
-        technique.make_points()
+    for technique in TECHNIQUES.values(): technique.make_points()

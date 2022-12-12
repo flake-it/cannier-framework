@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 import json
@@ -10,8 +11,7 @@ from cannier_framework.globals import ARGS, PLOTS_DIR, TABLES_DIR
 
 
 def load_subjects():
-    with open("subjects.json", "r") as f:
-        return json.load(f)
+    with open("subjects.json", "r") as f: return json.load(f)
 
 
 def get_counters_max():
@@ -26,8 +26,7 @@ def fetch_counters(cur):
 
     cur.execute(
         "select count_churn, count_features, count_baseline, count_shuffle "
-        "from counters "
-        "where id = 1"
+        "from counters where id = 1"
     )
 
     return dict(zip(plugin_modes, cur.fetchone()))
@@ -38,9 +37,9 @@ def manage_pool(fn, args):
     n_finish = 0
     all_success = True
     t_start = time.time()
-
     random.shuffle(args)
     sys.stdout.write(f"0/{len(args)} 0/?\r")
+    gc.disable()
 
     with Pool(processes=min(ARGS.processes, len(args))) as pool:
         for message, success in pool.imap_unordered(fn, args):
@@ -51,7 +50,6 @@ def manage_pool(fn, args):
             t_remain = t_elapse / n_finish * n_remain
             t_elapse = round(t_elapse / 60)
             t_remain = round(t_remain / 60)
-
             sys.stdout.write(f"{message}\n\r")
             sys.stdout.write(f"{n_finish}/{n_remain} {t_elapse}/{t_remain}\r")
 
@@ -76,14 +74,12 @@ class PointPlot:
 
     def make(self, plot_file):
         with open(os.path.join(PLOTS_DIR, plot_file), "w") as f:
-            for options, data in self.plot:
-                if options:
-                    f.write(f"\\addplot[{options}] ")
-                else:
-                    f.write(f"\\addplot ")
-
+            for options, data, legend in self.plot:
+                if options: f.write(f"\\addplot[{options}] ")
+                else: f.write(f"\\addplot ")
                 coordinates = " ".join([f"({x},{y})" for x, y in data])
                 f.write(f"coordinates {{{coordinates}}};\n")
+                if legend: f.write(f"\\addlegendentry{{{legend}}}\n")
 
             for x, y, angle, label in self.pins:
                 f.write(
@@ -122,7 +118,7 @@ class Table:
     def from_data(cls, row_labels, data):
         return cls([
             [proj, *data_proj] 
-            for proj, data_proj in zip([*row_labels, "{\\bf Dataset}"], data)
+            for proj, data_proj in zip([*row_labels, "{\\bf Overall}"], data)
         ])
 
     def keep_row(self, row):
@@ -136,23 +132,18 @@ class Table:
 
         with open(os.path.join(TABLES_DIR, table_file), "w") as f:
             for x, row in enumerate(table):
-                if total_row and x == len(table) - 1:
-                    f.write("\\midrule\n")
-                elif x % 2 == 1:
-                    f.write("\\rowcolor{gray!20}\n")
+                if total_row and x == len(table) - 1: f.write("\\midrule\n")
+                elif x % 2 == 1: f.write("\\rowcolor{gray!20}\n")
 
                 row = [
-                    cell if y == 0 else self.format_cell(x, y - 1, cell) 
-                    for y, cell in enumerate(row)
+                    self.format_cell(x, y, cell) for y, cell in enumerate(row)
                 ]
 
                 f.write(" & ".join(row) + " \\\\\n")
 
 
 def get_sci_notation(cell):
-    if cell == 0:
-        return "-"
-
+    if cell == 0: return "-"
     base, expo = ("%.2e" % cell).split("e")
     return f"{base} \\times 10 ^ {int(expo)}"
 

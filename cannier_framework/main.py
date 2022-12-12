@@ -28,8 +28,9 @@ MENU = {
 
 
 def main():
+    gc.freeze()
+    np.seterr(all="ignore")
     parser = ArgumentParser("cannier-framework")
-
     parser.add_argument("command")
     parser.add_argument("args", nargs="*")
     parser.add_argument("--processes", type=int, default=os.cpu_count())
@@ -50,6 +51,4 @@ def main():
         print(f"cannier-framework: incorrect arguments for '{ARGS.command}'.")
         sys.exit(1)
 
-    gc.disable()
-    np.seterr(all="ignore")
     fn(*ARGS.args)

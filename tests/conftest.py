@@ -21,18 +21,13 @@ def args():
 def data():
     yield DATA
     DATA.__dict__.clear()
+    DATA.__init__()
 
 
 @pytest.fixture
 def db_file(request, tmpdir):
     schema_file = request.config.getoption("schema-file")
-
-    with open(schema_file, "r") as f:
-        schema = f.read()
-
+    with open(schema_file, "r") as f: schema = f.read()
     db_file = os.path.join(tmpdir.strpath, "db.sqlite3")
-    
-    with sqlite3.connect(db_file) as con:
-        con.executescript(schema)
-
+    with sqlite3.connect(db_file) as con: con.executescript(schema)
     yield db_file

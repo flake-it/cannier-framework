@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 import json
@@ -57,6 +58,7 @@ class Container:
         )
 
     def start(self):
+        gc.enable()
         stdout_file = os.path.join(STDOUT_DIR, self.container_id)
 
         try:
@@ -103,35 +105,44 @@ def fetch_victims(cur):
     return [victim_nodeid for victim_nodeid, in cur.fetchall()]
 
 
+def iter_containers_victim(db_file, proj, commands_exec):
+    with sqlite3.connect(db_file) as con:
+        victims = fetch_victims(con.cursor())
+
+    for i, victim_nodeid in enumerate(victims):
+        yield Container(
+            f"{proj}_victim_{i}", proj, "victim", victim_nodeid, *commands_exec
+        )
+
+
+def iter_containers_other(proj, commands_exec, counters_max, counters, mode):
+    n_remaining = max(0, counters_max[mode] - counters[mode])
+
+    for i in range(n_remaining):
+        yield Container(
+            f"{proj}_{mode}_{i}", proj, mode, "", *commands_exec
+        )
+
+
 def iter_containers_proj(
     plugin_modes, db_file, proj, commands_exec, counters_max
 ):
-    with sqlite3.connect(db_file) as con:
+    with sqlite3.connect(db_file) as con: 
         counters = fetch_counters(con.cursor())
 
     for mode in plugin_modes:
-        if mode == "victim":
-            with sqlite3.connect(db_file) as con:
-                victims = fetch_victims(con.cursor())
-
-            for i, victim_nodeid in enumerate(victims):
-                yield Container(
-                    f"{proj}_{mode}_{i}", proj, mode, victim_nodeid, 
-                    *commands_exec
-                )
+        if mode == "victim": 
+            yield from iter_containers_victim(
+                db_file, proj, commands_exec
+            )
         else:
-            n_remaining = max(0, counters_max[mode] - counters[mode])
-
-            for i in range(n_remaining):
-                yield Container(
-                    f"{proj}_{mode}_{i}", proj, mode, "", *commands_exec
-                )
+            yield from iter_containers_other(
+                proj, commands_exec, counters_max, counters, mode
+            )
 
 
 def iter_containers(plugin_modes):
-    with open(os.path.join("schema.sql"), "r") as f:
-        schema = f.read()
-
+    with open(os.path.join("schema.sql"), "r") as f: schema = f.read()
     counters_max = get_counters_max()
 
     for repo, (_, _, commands_exec) in load_subjects().items():
@@ -139,8 +150,7 @@ def iter_containers(plugin_modes):
         db_file = os.path.join(VOLUME_DIR, f"{proj}.sqlite3")
 
         if not os.path.exists(db_file):
-            with sqlite3.connect(db_file) as con:
-                con.executescript(schema)
+            with sqlite3.connect(db_file) as con: con.executescript(schema)
 
         yield from iter_containers_proj(
             set(plugin_modes), db_file, proj, commands_exec, counters_max
@@ -150,7 +160,6 @@ def iter_containers(plugin_modes):
 def run_containers(*plugin_modes):
     os.makedirs(STDOUT_DIR, exist_ok=True)
     os.makedirs(VOLUME_DIR, exist_ok=True)
-    
     args = iter_containers(plugin_modes)
     all_success = manage_pool(Container.start, args)
 

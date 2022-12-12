@@ -7,7 +7,7 @@ from cannier_framework.model import Model
 PROJECT_TIMES = np.array([10, 12])
 ITEM_COSTS = np.array([2, 3, 5, 2, 3, 7])
 LABELS = np.array([True, False, True, False, True, False])
-PREDS = np.array([[[.9, .1, .2, .8, .7, .3], [.4, .2, .7, .2, .4, .6],]])
+PREDS = {1: np.array([[.9, .1, .2, .8, .7, .3], [.4, .2, .7, .2, .4, .6]])}
 
 PROJECT_MASKS = np.array([
     [True, False, True, False, True, False],
@@ -16,9 +16,9 @@ PROJECT_MASKS = np.array([
 
 
 def test_get_confusion():
-    model = Model(None, None, None)
+    model = Model.__new__(Model)
     model.labels = LABELS
-    model.preds = PREDS[:, (0,)]
+    model.preds = PREDS
     categories, amb_mask = model.get_confusion(.3, .8, 1, 0)
 
     categories_expected = np.array([
@@ -36,7 +36,7 @@ def test_get_confusion():
 
 
 def test_get_scores_simple(args, data):
-    model = Model(None, None, None)
+    model = Model.__new__(Model)
     model.labels = LABELS
     model.preds = PREDS
     args.n_repeats = 2
@@ -47,7 +47,7 @@ def test_get_scores_simple(args, data):
 
 
 def test_get_scores_simple_no_model(data):
-    model = Model(None, None, None)
+    model = Model.__new__(Model)
     data.project_times = PROJECT_TIMES
     perf, cost = model.get_scores_simple(ITEM_COSTS, .3, .8, 0)
     assert perf == 1
@@ -55,7 +55,7 @@ def test_get_scores_simple_no_model(data):
 
 
 def test_get_scores_full(args, data):
-    model = Model(None, None, None)
+    model = Model.__new__(Model)
     model.labels = LABELS
     model.preds = PREDS
     model.project_masks = PROJECT_MASKS
@@ -78,7 +78,7 @@ def test_get_scores_full(args, data):
 
 
 def test_get_scores_full_no_model(data):
-    model = Model(None, None, None)
+    model = Model.__new__(Model)
     model.labels = LABELS
     model.project_masks = PROJECT_MASKS
     data.project_times = PROJECT_TIMES
